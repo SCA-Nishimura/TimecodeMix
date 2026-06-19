@@ -1,0 +1,13 @@
+# Dependency directories
+node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build output
+dist/
+
+# Log files
+*.log
+bun.lockb
