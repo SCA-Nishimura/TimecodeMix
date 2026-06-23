@@ -17,6 +17,7 @@ const tcStartInput = document.getElementById('tc-start') as HTMLInputElement;
 const silenceDelayInput = document.getElementById('silence-delay') as HTMLInputElement;
 const outBitDepthSelect = document.getElementById('out-bitdepth') as HTMLSelectElement;
 const fpsSelect = document.getElementById('fps-select') as HTMLSelectElement;
+const ltcLevelSelect = document.getElementById('ltc-level-select') as HTMLSelectElement;
 
 const btnProcess = document.getElementById('btn-process') as HTMLButtonElement;
 const btnProcessText = btnProcess.querySelector('.btn-text') as HTMLSpanElement;
@@ -238,7 +239,8 @@ async function processAudio() {
     const totalDuration = totalSamples / sampleRate;
 
     // 4. Generate LTC Buffer for L Channel
-    const ltcL = generateLtcBuffer(totalDuration, sampleRate, startFramesOffset, -6, config);
+    const ltcLevel = parseInt(ltcLevelSelect.value, 10);
+    const ltcL = generateLtcBuffer(totalDuration, sampleRate, startFramesOffset, ltcLevel, config);
 
     // 5. Downmix Input Audio to Mono for R Channel with Silence padding
     const audioR = new Float32Array(totalSamples);

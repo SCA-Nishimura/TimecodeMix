@@ -23,7 +23,7 @@
                 <span class="logo-icon">⚡</span>
                 <h1>Timecode<span class="gradient-text">Mix</span></h1>
             </div>
-            <p class="subtitle">Drag & Drop an audio file to merge a precise LTC timecode signal into the Left channel (-6dBFS).</p>
+            <p class="subtitle">Drag & Drop an audio file to merge a precise LTC timecode signal into the Left channel.</p>
         </header>
 
         <main class="main-content">
@@ -105,8 +105,28 @@
                                 </select>
                             </div>
                             <div class="control-group">
-                                <label class="control-label">LTC Level</label>
-                                <input type="text" class="text-input font-mono" value="-6 dBFS" disabled>
+                                <label for="ltc-level-select" class="control-label">LTC Level</label>
+                                <select id="ltc-level-select" class="select-input font-mono">
+                                    <option value="0">0 dBFS</option>
+                                    <option value="-1">-1 dBFS</option>
+                                    <option value="-2">-2 dBFS</option>
+                                    <option value="-3">-3 dBFS</option>
+                                    <option value="-4">-4 dBFS</option>
+                                    <option value="-5">-5 dBFS</option>
+                                    <option value="-6" selected>-6 dBFS</option>
+                                    <option value="-7">-7 dBFS</option>
+                                    <option value="-8">-8 dBFS</option>
+                                    <option value="-9">-9 dBFS</option>
+                                    <option value="-10">-10 dBFS</option>
+                                    <option value="-11">-11 dBFS</option>
+                                    <option value="-12">-12 dBFS</option>
+                                    <option value="-13">-13 dBFS</option>
+                                    <option value="-14">-14 dBFS</option>
+                                    <option value="-15">-15 dBFS</option>
+                                    <option value="-16">-16 dBFS</option>
+                                    <option value="-17">-17 dBFS</option>
+                                    <option value="-18">-18 dBFS</option>
+                                </select>
                             </div>
                         </div>
 

@@ -1,8 +1,8 @@
 /**
  * LTC (Linear Timecode) Generator Module
  * Standard: SMPTE 12M
- * Supported Frame rates: Selectable (30, 29.97 NDF/DF, 25, 24, 23.976 NDF)
- * Amplitude: -6 dBFS (0.50118723)
+ * Supported Frame rates: Selectable (23.976, 24, 25, 29.97 DF/NDF, 30 DF/NDF)
+ * Amplitude: Variable, -18 to 0 dBFS (default -6 dBFS)
  */
 
 export interface FrameRateConfig {
@@ -182,7 +182,7 @@ export function generateLtcBuffer(
   const totalFrames = Math.ceil(durationSeconds * config.actualFps);
   const ltcBuffer = new Float32Array(totalSamples);
   
-  // Calculate amplitude: -6 dBFS -> 10^(-6/20) ~ 0.5011872
+  // Calculate amplitude: levelDbfs dBFS -> 10^(levelDbfs / 20)
   const amplitude = Math.pow(10, levelDbfs / 20);
   
   let currentLevel = -1.0;

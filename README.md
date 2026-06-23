@@ -25,7 +25,7 @@
 ## 🛠️ 技術仕様
 
 - **フレームレート**: 選択式（23.976FPS, 24FPS, 25FPS, 29.97FPS(NDF), 29.97FPS(DF), 30FPS(NDF), 30FPS(DF)）
-- **LTC音量レベル**: -6 dBFS 固定（リニア振幅 約0.501）
+- **LTC音量レベル**: 選択式（-18 dBFS 〜 0 dBFS、整数値、デフォルト: -6 dBFS）
 - **変調方式**: Bi-phase Mark Code (BMC) 変調（SMPTE 12M規格準拠）
 - **出力フォーマット**: Linear PCM WAV (Stereo: L=LTC, R=Source)
 - **ステレオ音源のモノラルミックスダウン処理** ([main.ts:L224-230](file:///home/media/projects/timecode_mix/src/main.ts#L224-L230)):
