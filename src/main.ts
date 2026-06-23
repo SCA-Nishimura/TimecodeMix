@@ -1,4 +1,4 @@
-import { generateLtcBuffer } from './ltc.ts';
+import { generateLtcBuffer, FRAME_RATES, FrameRateConfig } from './ltc.ts';
 import { encodeWav, parseWavInfo } from './wav.ts';
 
 // DOM Elements
@@ -16,6 +16,7 @@ const metaDuration = document.getElementById('meta-duration') as HTMLSpanElement
 const tcStartInput = document.getElementById('tc-start') as HTMLInputElement;
 const silenceDelayInput = document.getElementById('silence-delay') as HTMLInputElement;
 const outBitDepthSelect = document.getElementById('out-bitdepth') as HTMLSelectElement;
+const fpsSelect = document.getElementById('fps-select') as HTMLSelectElement;
 
 const btnProcess = document.getElementById('btn-process') as HTMLButtonElement;
 const btnProcessText = btnProcess.querySelector('.btn-text') as HTMLSpanElement;
@@ -153,8 +154,8 @@ async function handleFile(file: File) {
 /**
  * Parses timecode string (HH:MM:SS:FF or H:M:S:F) into total frame count
  */
-function parseTimecode(str: string): number {
-  const parts = str.trim().split(/[:.]/);
+function parseTimecode(str: string, config: FrameRateConfig): number {
+  const parts = str.trim().split(/[:.;,]/);
   if (parts.length !== 4) {
     throw new Error('Invalid format. Use HH:MM:SS:FF (e.g. 01:00:00:00)');
   }
@@ -167,12 +168,28 @@ function parseTimecode(str: string): number {
     throw new Error('Timecode contains non-numeric values.');
   }
 
-  if (h < 0 || m < 0 || m >= 60 || s < 0 || s >= 60 || f < 0 || f >= 30) {
-    throw new Error('Values out of range. Frame must be 0-29. Min/Sec must be 0-59.');
+  const maxFrames = config.timecodeFps;
+  if (h < 0 || m < 0 || m >= 60 || s < 0 || s >= 60 || f < 0 || f >= maxFrames) {
+    throw new Error(`Values out of range. Frame must be 0-${maxFrames - 1}. Min/Sec must be 0-59.`);
   }
 
-  // Convert to total frames at 30 fps
-  return (h * 3600 + m * 60 + s) * 30 + f;
+  if (config.isDropFrame) {
+    // Drop frame timecode to total frames:
+    // Drop 2 frames per minute, except every 10th minute (0, 10, 20, 30, 40, 50).
+    const totalMinutes = h * 60 + m;
+    const dropFrames = 2 * (totalMinutes - Math.floor(totalMinutes / 10));
+
+    // Check if the input timecode is a dropped frame (invalid timecode)
+    // Dropped frames are frame 0 and 1 of every minute except the tens of minutes.
+    if (m % 10 !== 0 && s === 0 && (f === 0 || f === 1)) {
+      throw new Error('Invalid drop-frame timecode (this frame was dropped).');
+    }
+
+    return (h * 3600 + m * 60 + s) * 30 + f - dropFrames;
+  } else {
+    // Convert to total frames at selected frame rate
+    return (h * 3600 + m * 60 + s) * maxFrames + f;
+  }
 }
 
 /**
@@ -181,10 +198,14 @@ function parseTimecode(str: string): number {
 async function processAudio() {
   if (!decodedAudioBuffer) return;
 
-  // 1. Get and Validate Settings
-  let startFramesOffset = 108000; // 01:00:00:00 (1:0:0:0) default
+  // 1. Get Selected Frame Rate Config
+  const selectedFpsId = fpsSelect.value;
+  const config = FRAME_RATES.find(fr => fr.id === selectedFpsId) || FRAME_RATES[0];
+
+  // 2. Get and Validate Settings
+  let startFramesOffset = 3600 * config.timecodeFps; // 01:00:00:00 (1:0:0:0) default based on config
   try {
-    startFramesOffset = parseTimecode(tcStartInput.value);
+    startFramesOffset = parseTimecode(tcStartInput.value, config);
   } catch (e: any) {
     alert(e.message || 'Invalid start timecode format. Please use HH:MM:SS:FF (e.g. 01:00:00:00)');
     tcStartInput.focus();
@@ -201,7 +222,7 @@ async function processAudio() {
     return;
   }
 
-  // 2. Set UI processing state
+  // 3. Set UI processing state
   btnProcess.disabled = true;
   btnProcessText.textContent = 'Processing...';
   btnProcessSpinner.classList.remove('hidden');
@@ -216,10 +237,10 @@ async function processAudio() {
     const totalSamples = silenceSamples + audioSamples;
     const totalDuration = totalSamples / sampleRate;
 
-    // 3. Generate LTC Buffer for L Channel
-    const ltcL = generateLtcBuffer(totalDuration, sampleRate, startFramesOffset, -6);
+    // 4. Generate LTC Buffer for L Channel
+    const ltcL = generateLtcBuffer(totalDuration, sampleRate, startFramesOffset, -6, config);
 
-    // 4. Downmix Input Audio to Mono for R Channel with Silence padding
+    // 5. Downmix Input Audio to Mono for R Channel with Silence padding
     const audioR = new Float32Array(totalSamples);
     if (decodedAudioBuffer.numberOfChannels >= 2) {
       const leftIn = decodedAudioBuffer.getChannelData(0);
@@ -232,7 +253,7 @@ async function processAudio() {
       audioR.set(channelData, silenceSamples);
     }
 
-    // 5. Determine Export Bit Depth
+    // 6. Determine Export Bit Depth
     let targetBitDepth: 16 | 24 = 16;
     const selection = outBitDepthSelect.value;
     if (selection === 'auto') {
@@ -241,10 +262,10 @@ async function processAudio() {
       targetBitDepth = selection === '24' ? 24 : 16;
     }
 
-    // 6. Encode WAV
+    // 7. Encode WAV
     const wavBlob = encodeWav(ltcL, audioR, sampleRate, targetBitDepth);
 
-    // 7. Cleanup old object URL and create new one
+    // 8. Cleanup old object URL and create new one
     if (generatedWavUrl) {
       URL.revokeObjectURL(generatedWavUrl);
     }
@@ -253,9 +274,9 @@ async function processAudio() {
     // Set download link
     btnDownload.href = generatedWavUrl;
     const originalBase = loadedFile ? loadedFile.name.replace(/\.[^/.]+$/, "") : "audio";
-    btnDownload.download = `${originalBase}_ltc_30fps.wav`;
+    btnDownload.download = `${originalBase}_ltc_${config.id}fps.wav`;
 
-    // 8. Prepare Preview AudioBuffer
+    // 9. Prepare Preview AudioBuffer
     if (audioCtx) {
       previewBuffer = audioCtx.createBuffer(2, totalSamples, sampleRate);
       previewBuffer.getChannelData(0).set(ltcL);

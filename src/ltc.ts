@@ -1,10 +1,26 @@
 /**
  * LTC (Linear Timecode) Generator Module
  * Standard: SMPTE 12M
- * Frame rate: 30fps (non-drop)
- * Default start: 01:00:00:00
+ * Supported Frame rates: Selectable (30, 29.97 NDF/DF, 25, 24, 23.976 NDF)
  * Amplitude: -6 dBFS (0.50118723)
  */
+
+export interface FrameRateConfig {
+  id: string;
+  label: string;
+  timecodeFps: number;
+  actualFps: number;
+  isDropFrame: boolean;
+}
+
+export const FRAME_RATES: FrameRateConfig[] = [
+  { id: '30', label: '30 fps', timecodeFps: 30, actualFps: 30, isDropFrame: false },
+  { id: '29.97-df', label: '29.97 fps DF', timecodeFps: 30, actualFps: 30000 / 1001, isDropFrame: true },
+  { id: '29.97-ndf', label: '29.97 fps NDF', timecodeFps: 30, actualFps: 30000 / 1001, isDropFrame: false },
+  { id: '25', label: '25 fps', timecodeFps: 25, actualFps: 25, isDropFrame: false },
+  { id: '24', label: '24 fps', timecodeFps: 24, actualFps: 24, isDropFrame: false },
+  { id: '23.976', label: '23.976 fps NDF', timecodeFps: 24, actualFps: 24000 / 1001, isDropFrame: false },
+];
 
 export interface Timecode {
   hours: number;
@@ -14,38 +30,62 @@ export interface Timecode {
 }
 
 /**
- * Converts a total frame index into a Timecode object
+ * Converts a total frame index into a Timecode object based on frame rate config
  */
-export function frameToTimecode(totalFrames: number): Timecode {
-  let f = totalFrames;
-  
-  const frames = f % 30;
-  f = Math.floor(f / 30);
-  
-  const seconds = f % 60;
-  f = Math.floor(f / 60);
-  
-  const minutes = f % 60;
-  f = Math.floor(f / 60);
-  
-  const hours = f % 24;
-  
-  return { hours, minutes, seconds, frames };
+export function frameToTimecode(totalFrames: number, config: FrameRateConfig): Timecode {
+  if (config.isDropFrame) {
+    let f = totalFrames;
+    const d = Math.floor(f / 17982);
+    const m = f % 17982;
+    
+    let minutes = d * 10;
+    let frames_remaining = m;
+    if (frames_remaining >= 1800) {
+      frames_remaining -= 1800;
+      const extra_minutes = Math.floor(frames_remaining / 1798) + 1;
+      minutes += extra_minutes;
+      frames_remaining = frames_remaining % 1798;
+      frames_remaining += 2;
+    }
+    const seconds = Math.floor(frames_remaining / 30);
+    const frames = frames_remaining % 30;
+    const hours = Math.floor(minutes / 60) % 24;
+    minutes = minutes % 60;
+    
+    return { hours, minutes, seconds, frames };
+  } else {
+    let f = totalFrames;
+    const fps = config.timecodeFps;
+    
+    const frames = f % fps;
+    f = Math.floor(f / fps);
+    
+    const seconds = f % 60;
+    f = Math.floor(f / 60);
+    
+    const minutes = f % 60;
+    f = Math.floor(f / 60);
+    
+    const hours = f % 24;
+    
+    return { hours, minutes, seconds, frames };
+  }
 }
 
 /**
- * Format timecode object as HH:MM:SS:FF string
+ * Format timecode object as HH:MM:SS:FF (or HH:MM:SS;FF for drop frame) string
  */
-export function formatTimecode(tc: Timecode): string {
+export function formatTimecode(tc: Timecode, isDropFrame: boolean): string {
   const pad = (n: number) => n.toString().padStart(2, '0');
-  return `${pad(tc.hours)}:${pad(tc.minutes)}:${pad(tc.seconds)}:${pad(tc.frames)}`;
+  const separator = isDropFrame ? ';' : ':';
+  return `${pad(tc.hours)}:${pad(tc.minutes)}:${pad(tc.seconds)}${separator}${pad(tc.frames)}`;
 }
 
 /**
  * Generates the 80 bits for a specific frame index
  */
-export function generateLtcBits(totalFrameIndex: number): number[] {
-  const tc = frameToTimecode(totalFrameIndex);
+export function generateLtcBits(totalFrameIndex: number, config: FrameRateConfig): number[] {
+  const tc = frameToTimecode(totalFrameIndex, config);
   const bits = new Array<number>(80).fill(0);
 
   const f_units = tc.frames % 10;
@@ -72,8 +112,8 @@ export function generateLtcBits(totalFrameIndex: number): number[] {
   writeBcd(f_units, 0, 4);
   // Frame tens (8-9)
   writeBcd(f_tens, 8, 2);
-  // Bit 10 is drop frame flag (0 for non-drop)
-  bits[10] = 0;
+  // Bit 10 is drop frame flag (1 for drop, 0 for non-drop)
+  bits[10] = config.isDropFrame ? 1 : 0;
   // Bit 11 is color frame flag (0)
   bits[11] = 0;
 
@@ -133,11 +173,12 @@ export function generateLtcBits(totalFrameIndex: number): number[] {
 export function generateLtcBuffer(
   durationSeconds: number,
   sampleRate: number,
-  startFramesOffset: number = 108000, // 01:00:00:00 at 30fps
-  levelDbfs: number = -6
+  startFramesOffset: number,
+  levelDbfs: number,
+  config: FrameRateConfig
 ): Float32Array {
   const totalSamples = Math.floor(durationSeconds * sampleRate);
-  const totalFrames = Math.ceil(durationSeconds * 30);
+  const totalFrames = Math.ceil(durationSeconds * config.actualFps);
   const ltcBuffer = new Float32Array(totalSamples);
   
   // Calculate amplitude: -6 dBFS -> 10^(-6/20) ~ 0.5011872
@@ -146,12 +187,12 @@ export function generateLtcBuffer(
   let currentLevel = -1.0;
 
   for (let f = 0; f < totalFrames; f++) {
-    const frameStart = Math.floor(f * sampleRate / 30);
-    const frameEnd = Math.floor((f + 1) * sampleRate / 30);
+    const frameStart = Math.floor(f * sampleRate / config.actualFps);
+    const frameEnd = Math.floor((f + 1) * sampleRate / config.actualFps);
     const actualSamplesInFrame = frameEnd - frameStart;
     
     // Get the bits for this frame
-    const frameBits = generateLtcBits(f + startFramesOffset);
+    const frameBits = generateLtcBits(f + startFramesOffset, config);
 
     for (let b = 0; b < 80; b++) {
       const bitStart = frameStart + Math.floor(b * actualSamplesInFrame / 80);

@@ -23,7 +23,7 @@
                 <span class="logo-icon">⚡</span>
                 <h1>Timecode<span class="gradient-text">Mix</span></h1>
             </div>
-            <p class="subtitle">Drag & Drop an audio file to merge a precise 30fps LTC signal into the Left channel (-6dBFS).</p>
+            <p class="subtitle">Drag & Drop an audio file to merge a precise LTC timecode signal into the Left channel (-6dBFS).</p>
         </header>
 
         <main class="main-content">
@@ -93,8 +93,15 @@
 
                         <div class="settings-row">
                             <div class="control-group">
-                                <label class="control-label">Frame Rate</label>
-                                <input type="text" class="text-input font-mono" value="30 fps" disabled>
+                                <label for="fps-select" class="control-label">Frame Rate</label>
+                                <select id="fps-select" class="select-input font-mono">
+                                    <option value="30" selected>30 fps (NDF)</option>
+                                    <option value="29.97-df">29.97 fps DF</option>
+                                    <option value="29.97-ndf">29.97 fps NDF</option>
+                                    <option value="25">25 fps</option>
+                                    <option value="24">24 fps</option>
+                                    <option value="23.976">23.976 fps NDF</option>
+                                </select>
                             </div>
                             <div class="control-group">
                                 <label class="control-label">LTC Level</label>
