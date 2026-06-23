@@ -314,6 +314,11 @@ body {
   transition: all var(--transition-fast);
 }
 
+.select-input option {
+  background-color: #12152b; /* Solid dark background to prevent transparent dropdown options */
+  color: var(--text-primary);
+}
+
 .text-input:focus, .select-input:focus {
   outline: none;
   border-color: var(--accent-indigo);
