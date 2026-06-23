@@ -14,12 +14,13 @@ export interface FrameRateConfig {
 }
 
 export const FRAME_RATES: FrameRateConfig[] = [
-  { id: '30', label: '30 fps', timecodeFps: 30, actualFps: 30, isDropFrame: false },
-  { id: '29.97-df', label: '29.97 fps DF', timecodeFps: 30, actualFps: 30000 / 1001, isDropFrame: true },
-  { id: '29.97-ndf', label: '29.97 fps NDF', timecodeFps: 30, actualFps: 30000 / 1001, isDropFrame: false },
-  { id: '25', label: '25 fps', timecodeFps: 25, actualFps: 25, isDropFrame: false },
-  { id: '24', label: '24 fps', timecodeFps: 24, actualFps: 24, isDropFrame: false },
-  { id: '23.976', label: '23.976 fps NDF', timecodeFps: 24, actualFps: 24000 / 1001, isDropFrame: false },
+  { id: '30-ndf', label: '30FPS(NDF)', timecodeFps: 30, actualFps: 30, isDropFrame: false },
+  { id: '30-df', label: '30FPS(DF)', timecodeFps: 30, actualFps: 30000 / 1001, isDropFrame: true },
+  { id: '29.97-ndf', label: '29.97FPS(NDF)', timecodeFps: 30, actualFps: 30000 / 1001, isDropFrame: false },
+  { id: '29.97-df', label: '29.97FPS(DF)', timecodeFps: 30, actualFps: 30000 / 1001, isDropFrame: true },
+  { id: '25', label: '25FPS', timecodeFps: 25, actualFps: 25, isDropFrame: false },
+  { id: '24', label: '24FPS', timecodeFps: 24, actualFps: 24, isDropFrame: false },
+  { id: '23.976', label: '23.976FPS', timecodeFps: 24, actualFps: 24000 / 1001, isDropFrame: false },
 ];
 
 export interface Timecode {

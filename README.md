@@ -24,7 +24,7 @@
 
 ## 🛠️ 技術仕様
 
-- **フレームレート**: 選択式（30 fps, 29.97 fps DF/NDF, 25 fps, 24 fps, 23.976 fps NDF）
+- **フレームレート**: 選択式（23.976FPS, 24FPS, 25FPS, 29.97FPS(NDF), 29.97FPS(DF), 30FPS(NDF), 30FPS(DF)）
 - **LTC音量レベル**: -6 dBFS 固定（リニア振幅 約0.501）
 - **変調方式**: Bi-phase Mark Code (BMC) 変調（SMPTE 12M規格準拠）
 - **出力フォーマット**: Linear PCM WAV (Stereo: L=LTC, R=Source)
