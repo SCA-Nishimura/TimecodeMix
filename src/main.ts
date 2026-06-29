@@ -14,7 +14,8 @@ const metaBitDepth = document.getElementById('meta-bitdepth') as HTMLSpanElement
 const metaDuration = document.getElementById('meta-duration') as HTMLSpanElement;
 
 const tcStartInput = document.getElementById('tc-start') as HTMLInputElement;
-const silenceDelayInput = document.getElementById('silence-delay') as HTMLInputElement;
+const prerollInput = document.getElementById('preroll-time') as HTMLInputElement;
+const postrollInput = document.getElementById('postroll-time') as HTMLInputElement;
 const outBitDepthSelect = document.getElementById('out-bitdepth') as HTMLSelectElement;
 const fpsSelect = document.getElementById('fps-select') as HTMLSelectElement;
 const ltcLevelSelect = document.getElementById('ltc-level-select') as HTMLSelectElement;
@@ -213,13 +214,23 @@ async function processAudio() {
     return;
   }
 
-  let silenceSeconds = 0;
-  const silenceVal = parseFloat(silenceDelayInput.value);
-  if (!isNaN(silenceVal) && silenceVal >= 0) {
-    silenceSeconds = silenceVal;
+  let prerollSeconds = 0;
+  const prerollVal = parseFloat(prerollInput.value);
+  if (!isNaN(prerollVal) && prerollVal >= 0) {
+    prerollSeconds = prerollVal;
   } else {
-    alert('Please enter a valid non-negative number for Silence Delay.');
-    silenceDelayInput.focus();
+    alert('Please enter a valid non-negative number for Preroll.');
+    prerollInput.focus();
+    return;
+  }
+
+  let postrollSeconds = 0;
+  const postrollVal = parseFloat(postrollInput.value);
+  if (!isNaN(postrollVal) && postrollVal >= 0) {
+    postrollSeconds = postrollVal;
+  } else {
+    alert('Please enter a valid non-negative number for Postroll.');
+    postrollInput.focus();
     return;
   }
 
@@ -234,8 +245,9 @@ async function processAudio() {
   try {
     const sampleRate = decodedAudioBuffer.sampleRate;
     const audioSamples = decodedAudioBuffer.length;
-    const silenceSamples = Math.floor(silenceSeconds * sampleRate);
-    const totalSamples = silenceSamples + audioSamples;
+    const prerollSamples = Math.floor(prerollSeconds * sampleRate);
+    const postrollSamples = Math.floor(postrollSeconds * sampleRate);
+    const totalSamples = prerollSamples + audioSamples + postrollSamples;
     const totalDuration = totalSamples / sampleRate;
 
     // 4. Generate LTC Buffer for L Channel
@@ -248,11 +260,11 @@ async function processAudio() {
       const leftIn = decodedAudioBuffer.getChannelData(0);
       const rightIn = decodedAudioBuffer.getChannelData(1);
       for (let i = 0; i < audioSamples; i++) {
-        audioR[silenceSamples + i] = (leftIn[i] + rightIn[i]) / 2;
+        audioR[prerollSamples + i] = (leftIn[i] + rightIn[i]) / 2;
       }
     } else {
       const channelData = decodedAudioBuffer.getChannelData(0);
-      audioR.set(channelData, silenceSamples);
+      audioR.set(channelData, prerollSamples);
     }
 
     // 6. Determine Export Bit Depth
