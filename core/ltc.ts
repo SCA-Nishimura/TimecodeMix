@@ -83,6 +83,47 @@ export function formatTimecode(tc: Timecode, isDropFrame: boolean): string {
 }
 
 /**
+ * Parses timecode string (HH:MM:SS:FF or H:M:S:F) into total frame count
+ */
+export function parseTimecode(str: string, config: FrameRateConfig): number {
+  const parts = str.trim().split(/[:.;,]/);
+  if (parts.length !== 4) {
+    throw new Error('Invalid format. Use HH:MM:SS:FF (e.g. 01:00:00:00)');
+  }
+  const h = parseInt(parts[0], 10);
+  const m = parseInt(parts[1], 10);
+  const s = parseInt(parts[2], 10);
+  const f = parseInt(parts[3], 10);
+
+  if (isNaN(h) || isNaN(m) || isNaN(s) || isNaN(f)) {
+    throw new Error('Timecode contains non-numeric values.');
+  }
+
+  const maxFrames = config.timecodeFps;
+  if (h < 0 || m < 0 || m >= 60 || s < 0 || s >= 60 || f < 0 || f >= maxFrames) {
+    throw new Error(`Values out of range. Frame must be 0-${maxFrames - 1}. Min/Sec must be 0-59.`);
+  }
+
+  if (config.isDropFrame) {
+    // Drop frame timecode to total frames:
+    // Drop 2 frames per minute, except every 10th minute (0, 10, 20, 30, 40, 50).
+    const totalMinutes = h * 60 + m;
+    const dropFrames = 2 * (totalMinutes - Math.floor(totalMinutes / 10));
+
+    // Check if the input timecode is a dropped frame (invalid timecode)
+    // Dropped frames are frame 0 and 1 of every minute except the tens of minutes.
+    if (m % 10 !== 0 && s === 0 && (f === 0 || f === 1)) {
+      throw new Error('Invalid drop-frame timecode (this frame was dropped).');
+    }
+
+    return (h * 3600 + m * 60 + s) * 30 + f - dropFrames;
+  } else {
+    // Convert to total frames at selected frame rate
+    return (h * 3600 + m * 60 + s) * maxFrames + f;
+  }
+}
+
+/**
  * Generates the 80 bits for a specific frame index
  */
 export function generateLtcBits(totalFrameIndex: number, config: FrameRateConfig): number[] {
