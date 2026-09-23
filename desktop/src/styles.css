@@ -1,0 +1,76 @@
+/* Web版(src/style.css)と同じ配色を使い、両版で見た目を揃える */
+:root {
+  --bg-dark: #070913;
+  --panel-bg: rgba(13, 17, 39, 0.6);
+  --panel-border: rgba(255, 255, 255, 0.07);
+  --accent-purple: #a855f7;
+  --text-primary: #f3f4f6;
+  --text-secondary: #9ca3af;
+
+  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  background-color: var(--bg-dark);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100vh;
+  background-color: var(--bg-dark);
+}
+
+.container {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 48px 24px;
+}
+
+h1 {
+  font-size: 2rem;
+  font-weight: 600;
+}
+
+h1 small {
+  font-size: 0.9rem;
+  font-weight: 400;
+  color: var(--accent-purple);
+  vertical-align: super;
+  margin-left: 4px;
+}
+
+.subtitle {
+  color: var(--text-secondary);
+  margin-bottom: 32px;
+}
+
+.status {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 24px;
+}
+
+.status h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: var(--accent-purple);
+}
+
+.status dt {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin-top: 12px;
+}
+
+.status dd {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.95rem;
+}
