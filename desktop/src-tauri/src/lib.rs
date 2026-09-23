@@ -5,7 +5,7 @@ mod render;
 use render::RenderOptions;
 
 #[tauri::command]
-fn check_ffmpeg() -> Result<String, String> {
+fn check_ffmpeg() -> Result<ffmpeg::FfmpegStatus, String> {
     ffmpeg::check_available()
 }
 

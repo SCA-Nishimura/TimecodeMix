@@ -11,3 +11,6 @@ dist/
 # Log files
 *.log
 bun.lockb
+
+# 配布用に生成するポータブル版 (scripts/package-portable.mjs)
+dist-portable/

@@ -43,14 +43,30 @@ pub fn run(tool: &str, args: &[&str]) -> Result<Output, String> {
     })
 }
 
-/// ffprobe / ffmpeg が利用可能かを確認し、バージョン文字列の1行目を返す
-pub fn check_available() -> Result<String, String> {
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FfmpegStatus {
+    pub version: String,
+    /// アプリに同梱されたものを使っているか (false ならPATH上のもの)
+    pub bundled: bool,
+    pub path: String,
+}
+
+/// ffprobe が利用可能かを確認し、バージョンと参照元を返す。
+/// 参照元を返すのは、配布時に同梱バイナリが使われているかを確認できるようにするため。
+pub fn check_available() -> Result<FfmpegStatus, String> {
+    let resolved = resolve_tool("ffprobe");
     let output = run("ffprobe", &["-version"])?;
     if !output.status.success() {
         return Err("ffprobe の起動に失敗しました。".to_string());
     }
+
     let text = String::from_utf8_lossy(&output.stdout);
-    Ok(text.lines().next().unwrap_or("").to_string())
+    Ok(FfmpegStatus {
+        version: text.lines().next().unwrap_or("").to_string(),
+        bundled: resolved.is_absolute(),
+        path: resolved.to_string_lossy().to_string(),
+    })
 }
 
 /// 映像ファイルのストリーム情報を ffprobe の JSON のまま返す。
@@ -110,8 +126,8 @@ mod tests {
 
     #[test]
     fn ffprobe_is_available() {
-        let version = check_available().expect("ffprobe が見つかりません");
-        assert!(version.contains("ffprobe"), "想定外の出力: {version}");
+        let status = check_available().expect("ffprobe が見つかりません");
+        assert!(status.version.contains("ffprobe"), "想定外の出力: {}", status.version);
     }
 
     #[test]

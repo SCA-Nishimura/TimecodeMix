@@ -30,6 +30,13 @@ const VIDEO_EXTENSIONS = ['mp4', 'mov', 'm4v'];
 /** 黒フレームを本編と同じ形式で作れるコーデック。これ以外は前後の付加ができない */
 const PADDABLE_CODECS = ['h264', 'hevc', 'prores'];
 
+interface FfmpegStatus {
+  version: string;
+  /** アプリに同梱されたものを使っているか */
+  bundled: boolean;
+  path: string;
+}
+
 interface LoadedVideo {
   path: string;
   detection: VideoDetection;
@@ -60,7 +67,10 @@ async function init() {
   }
 
   try {
-    envStatus.textContent = await invoke<string>('check_ffmpeg');
+    const status = await invoke<FfmpegStatus>('check_ffmpeg');
+    // 同梱版とPATH版のどちらを使っているかを出す。配布後の切り分けに効く
+    envStatus.textContent = `${status.version} ${status.bundled ? '(同梱)' : '(システム)'}`;
+    envStatus.title = status.path;
     envStatus.classList.add('is-ok');
   } catch (e) {
     envStatus.textContent = String(e);
