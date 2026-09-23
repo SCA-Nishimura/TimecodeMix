@@ -1,20 +1,21 @@
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;
 use serde::Deserialize;
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ffmpeg::run;
+use crate::ltc;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderOptions {
     pub input_path: String,
     pub output_path: String,
-    /// LTCの生データ(f32le mono)を書き出したテンポラリファイル
-    pub ltc_path: String,
+
+    /// FRAME_RATES のid。LTCの生成条件はここから引く
+    pub fps_id: String,
+    pub ltc_level_dbfs: f64,
 
     pub width: u32,
     pub height: u32,
@@ -193,32 +194,58 @@ fn unique_work_dir() -> Result<PathBuf, String> {
 
 pub fn render(options: RenderOptions) -> Result<String, String> {
     let work_dir = unique_work_dir()?;
-
     let result = render_inner(&options, &work_dir);
-
     let _ = fs::remove_dir_all(&work_dir);
-    // LTCは使い切りなので後始末する。失敗時も残さず、やり直す場合は作り直す。
-    cleanup_ltc_file(&options.ltc_path);
-
     result
 }
 
-/// create_ltc_file が作ったディレクトリごと削除する
-fn cleanup_ltc_file(ltc_path: &str) {
-    let path = Path::new(ltc_path);
-    let _ = fs::remove_file(path);
-    if let Some(parent) = path.parent() {
-        if parent
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with("timecodemix-"))
-        {
-            let _ = fs::remove_dir(parent);
-        }
-    }
+/// LTC波形を作業ディレクトリに書き出す。
+///
+/// 尺は total_samples から逆算するため、映像側の長さと必ず一致する。
+fn write_ltc_file(
+    options: &RenderOptions,
+    config: &ltc::FrameRateConfig,
+    start_frames: i64,
+    work_dir: &Path,
+) -> Result<PathBuf, String> {
+    let path = work_dir.join("ltc.f32");
+    let file = fs::File::create(&path)
+        .map_err(|e| format!("タイムコードの書き出し先を作成できません: {e}"))?;
+    let mut writer = io::BufWriter::new(file);
+
+    let duration_seconds = options.total_samples as f64 / options.sample_rate as f64;
+    ltc::write_ltc(
+        &mut writer,
+        duration_seconds,
+        options.sample_rate,
+        start_frames,
+        options.ltc_level_dbfs,
+        config,
+    )
+    .map_err(|e| format!("タイムコードの生成に失敗しました: {e}"))?;
+
+    writer
+        .flush()
+        .map_err(|e| format!("タイムコードの書き出しに失敗しました: {e}"))?;
+    Ok(path)
 }
 
 fn render_inner(options: &RenderOptions, work_dir: &Path) -> Result<String, String> {
+    let config = ltc::find_frame_rate(&options.fps_id)
+        .ok_or_else(|| format!("未知のフレームレートです: {}", options.fps_id))?;
+    let start_frames = ltc::parse_timecode(&options.start_timecode, config)?;
+
+    // tmcdに書く文字列はここで正規化する。
+    // 受け取った文字列をそのまま使うと、"1:0:0:0" のような入力や
+    // ドロップフレームの区切り文字の違いがそのまま出力に出てしまう。
+    let canonical_timecode = ltc::format_timecode(
+        &ltc::frame_to_timecode(start_frames, config),
+        config.is_drop_frame,
+    );
+
+    // 0. LTC波形を生成する
+    let ltc_path = write_ltc_file(options, config, start_frames, work_dir)?;
+
     // 1. 本編をストリームコピーでTS化
     let main_ts = work_dir.join("main.ts");
     remux_main_to_ts(&options.input_path, &main_ts)?;
@@ -263,7 +290,7 @@ fn render_inner(options: &RenderOptions, work_dir: &Path) -> Result<String, Stri
         "-ac".into(),
         "1".into(),
         "-i".into(),
-        options.ltc_path.clone(),
+        ltc_path.to_string_lossy().to_string(),
     ];
 
     if options.source_channels > 0 {
@@ -282,7 +309,7 @@ fn render_inner(options: &RenderOptions, work_dir: &Path) -> Result<String, Stri
         "-c:a".into(),
         audio_codec(options.bit_depth).into(),
         "-timecode".into(),
-        options.start_timecode.clone(),
+        canonical_timecode,
         "-f".into(),
         "mov".into(),
         options.output_path.clone(),
@@ -298,29 +325,6 @@ fn render_inner(options: &RenderOptions, work_dir: &Path) -> Result<String, Stri
     }
 
     Ok(options.output_path.clone())
-}
-
-/// フロントエンドが分割生成したLTCを追記していくための受け口。
-/// 一括で受け取ると長尺でメモリが破綻するため、チャンクに分けて書き込む。
-pub fn create_ltc_file() -> Result<String, String> {
-    let path = unique_work_dir()?.join("ltc.f32");
-    fs::write(&path, b"").map_err(|e| format!("テンポラリファイルを作成できません: {e}"))?;
-    Ok(path.to_string_lossy().to_string())
-}
-
-/// LTCはbase64で受け取る。生のバイト配列で渡すとIPCがJSONの数値配列になり、
-/// 数百万要素では実用にならないため。
-pub fn append_ltc(path: &str, chunk_base64: &str) -> Result<(), String> {
-    let bytes = BASE64
-        .decode(chunk_base64)
-        .map_err(|e| format!("LTCデータを復号できません: {e}"))?;
-
-    let mut file = fs::OpenOptions::new()
-        .append(true)
-        .open(path)
-        .map_err(|e| format!("テンポラリファイルを開けません: {e}"))?;
-    file.write_all(&bytes)
-        .map_err(|e| format!("LTCの書き込みに失敗しました: {e}"))
 }
 
 #[cfg(test)]
@@ -358,28 +362,16 @@ mod tests {
         path
     }
 
-    /// 指定サンプル数ぶんの f32le データ(矩形波)を書き出す。
-    /// ここではLTCの中身ではなく、パイプラインが尺どおりに組み立てられるかを見る。
-    fn make_ltc_stub(name: &str, total_samples: u64) -> PathBuf {
-        let path = temp_path(name);
-        let mut bytes = Vec::with_capacity(total_samples as usize * 4);
-        for i in 0..total_samples {
-            let value: f32 = if (i / 20) % 2 == 0 { 0.5 } else { -0.5 };
-            bytes.extend_from_slice(&value.to_le_bytes());
-        }
-        fs::write(&path, bytes).expect("LTCスタブを書き出せません");
-        path
-    }
-
     fn probe_json(path: &Path) -> String {
         crate::ffmpeg::probe(&path.to_string_lossy()).expect("probeに失敗しました")
     }
 
-    fn options_for(source: &Path, ltc: &Path, out: &Path, pre: u32, post: u32, source_channels: u32, total_samples: u64) -> RenderOptions {
+    fn options_for(source: &Path, out: &Path, pre: u32, post: u32, source_channels: u32, total_samples: u64) -> RenderOptions {
         RenderOptions {
             input_path: source.to_string_lossy().to_string(),
             output_path: out.to_string_lossy().to_string(),
-            ltc_path: ltc.to_string_lossy().to_string(),
+            fps_id: "29.97-ndf".into(),
+            ltc_level_dbfs: -6.0,
             width: 320,
             height: 240,
             pixel_format: "yuv420p".into(),
@@ -406,10 +398,9 @@ mod tests {
         // 2秒 = 約60フレーム。前に30フレーム、後ろに15フレーム足す
         let total_frames = 60 + 30 + 15;
         let total_samples = total_samples_for(total_frames);
-        let ltc = make_ltc_stub("tcmix_render_ltc.f32", total_samples);
         let out = temp_path("tcmix_render_out.mov");
 
-        let options = options_for(&source, &ltc, &out, 30, 15, 1, total_samples);
+        let options = options_for(&source, &out, 30, 15, 1, total_samples);
         render(options).expect("レンダリングに失敗しました");
 
         let json = probe_json(&out);
@@ -424,7 +415,7 @@ mod tests {
         let stderr = String::from_utf8_lossy(&decode.stderr);
         assert!(stderr.trim().is_empty(), "復号エラーが出ました: {stderr}");
 
-        for f in [source, ltc, out] {
+        for f in [source, out] {
             let _ = fs::remove_file(f);
         }
     }
@@ -434,10 +425,9 @@ mod tests {
         let source = make_source("tcmix_black_src.mp4", 2, true);
         let total_frames = 60 + 30;
         let total_samples = total_samples_for(total_frames);
-        let ltc = make_ltc_stub("tcmix_black_ltc.f32", total_samples);
         let out = temp_path("tcmix_black_out.mov");
 
-        render(options_for(&source, &ltc, &out, 30, 0, 1, total_samples))
+        render(options_for(&source, &out, 30, 0, 1, total_samples))
             .expect("レンダリングに失敗しました");
 
         // プリロール中(0.5秒)は真っ黒、本編(1.5秒)は黒くないはず。
@@ -459,7 +449,7 @@ mod tests {
         assert!(dark >= 0.0 && dark < 20.0, "プリロールが黒くありません (YAVG={dark})");
         assert!(content > 30.0, "本編の映像が失われています (YAVG={content})");
 
-        for f in [source, ltc, out] {
+        for f in [source, out] {
             let _ = fs::remove_file(f);
         }
     }
@@ -469,14 +459,13 @@ mod tests {
         let source = make_source("tcmix_nopad_src.mp4", 2, true);
         let total_frames = 60;
         let total_samples = total_samples_for(total_frames);
-        let ltc = make_ltc_stub("tcmix_nopad_ltc.f32", total_samples);
         let out = temp_path("tcmix_nopad_out.mov");
 
-        render(options_for(&source, &ltc, &out, 0, 0, 1, total_samples))
+        render(options_for(&source, &out, 0, 0, 1, total_samples))
             .expect("レンダリングに失敗しました");
         assert!(out.exists());
 
-        for f in [source, ltc, out] {
+        for f in [source, out] {
             let _ = fs::remove_file(f);
         }
     }
@@ -486,16 +475,15 @@ mod tests {
         let source = make_source("tcmix_noaudio_src.mp4", 2, false);
         let total_frames = 60 + 30;
         let total_samples = total_samples_for(total_frames);
-        let ltc = make_ltc_stub("tcmix_noaudio_ltc.f32", total_samples);
         let out = temp_path("tcmix_noaudio_out.mov");
 
-        render(options_for(&source, &ltc, &out, 30, 0, 0, total_samples))
+        render(options_for(&source, &out, 30, 0, 0, total_samples))
             .expect("音声トラックが無い素材でレンダリングに失敗しました");
 
         let json = probe_json(&out);
         assert!(json.contains("\"channels\": 2"), "{json}");
 
-        for f in [source, ltc, out] {
+        for f in [source, out] {
             let _ = fs::remove_file(f);
         }
     }

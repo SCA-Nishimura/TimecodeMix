@@ -1,7 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import { FRAME_RATES, generateLtcBuffer, parseTimecode, frameToTimecode, formatTimecode } from '../../core/ltc.ts';
+// LTC波形の生成はRust側で行う (core/ltc.ts と同一出力であることをRustのテストで担保している)。
+// ここでは入力値の検証と表示用の変換にだけ使う。
+import { FRAME_RATES, parseTimecode, frameToTimecode, formatTimecode } from '../../core/ltc.ts';
 import { detectFromProbe, quantizeToFrames, type VideoDetection } from '../../core/video.ts';
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -27,8 +29,6 @@ const progress = el('progress');
 const VIDEO_EXTENSIONS = ['mp4', 'mov', 'm4v'];
 /** 黒フレームを本編と同じ形式で作れるコーデック。これ以外は前後の付加ができない */
 const PADDABLE_CODECS = ['h264', 'hevc', 'prores'];
-/** LTCを一括生成すると長尺でメモリが尽きるため、この秒数ずつ生成して書き出す */
-const CHUNK_SECONDS = 30;
 
 interface LoadedVideo {
   path: string;
@@ -253,16 +253,13 @@ async function render() {
   const timing = computeTiming(loaded);
 
   try {
-    showProgress('タイムコードを生成しています...');
-    const ltcPath = await invoke<string>('create_ltc_file');
-    await writeLtc(ltcPath, timing, config, startFrames, loaded.sampleRate);
-
-    showProgress('映像を書き出しています...');
+    showProgress('書き出しています...');
     await invoke<string>('render_video', {
       options: {
         inputPath: loaded.path,
         outputPath,
-        ltcPath,
+        fpsId: config.id,
+        ltcLevelDbfs: Number(ltcLevelSelect.value),
         width: loaded.width,
         height: loaded.height,
         pixelFormat: loaded.pixelFormat,
@@ -288,53 +285,6 @@ async function render() {
   } finally {
     btnRender.disabled = false;
   }
-}
-
-/**
- * LTCを一定時間ずつ生成してRust側へ追記していく。
- * 一括生成すると長尺でFloat32Arrayがメモリを食い尽くすため。
- */
-async function writeLtc(
-  ltcPath: string,
-  timing: ReturnType<typeof computeTiming>,
-  config: (typeof FRAME_RATES)[number],
-  startFrames: number,
-  sampleRate: number
-) {
-  const framesPerChunk = Math.max(1, Math.round(CHUNK_SECONDS * timing.actualFps));
-  let written = 0;
-
-  while (written < timing.totalFrames) {
-    const frames = Math.min(framesPerChunk, timing.totalFrames - written);
-    const buffer = generateLtcBuffer(
-      frames / timing.actualFps,
-      sampleRate,
-      startFrames + written,
-      Number(ltcLevelSelect.value),
-      config
-    );
-
-    await invoke('append_ltc', {
-      path: ltcPath,
-      chunk: toBase64(new Uint8Array(buffer.buffer, 0, buffer.length * 4)),
-    });
-
-    written += frames;
-    showProgress(
-      `タイムコードを生成しています... ${Math.round((written / timing.totalFrames) * 100)}%`
-    );
-    // 進捗表示を描画させる
-    await new Promise(resolve => requestAnimationFrame(resolve));
-  }
-}
-
-function toBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const STEP = 0x8000;
-  for (let i = 0; i < bytes.length; i += STEP) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + STEP));
-  }
-  return btoa(binary);
 }
 
 function showProgress(message: string, isError = false) {
