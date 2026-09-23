@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open, save } from '@tauri-apps/plugin-dialog';
 // LTC波形の生成はRust側で行う (core/ltc.ts と同一出力であることをRustのテストで担保している)。
@@ -25,10 +26,18 @@ const bitDepthSelect = el<HTMLSelectElement>('bit-depth');
 const paddingNote = el('padding-note');
 const btnRender = el<HTMLButtonElement>('btn-render');
 const progress = el('progress');
+const progressBar = el('progress-bar');
+const progressFill = el('progress-fill');
 
 const VIDEO_EXTENSIONS = ['mp4', 'mov', 'm4v'];
 /** 黒フレームを本編と同じ形式で作れるコーデック。これ以外は前後の付加ができない */
 const PADDABLE_CODECS = ['h264', 'hevc', 'prores'];
+
+interface RenderProgress {
+  /** 0.0 〜 1.0 */
+  ratio: number;
+  message: string;
+}
 
 interface FfmpegStatus {
   version: string;
@@ -81,6 +90,12 @@ async function init() {
 
   btnSelect.addEventListener('click', selectFile);
   btnRender.addEventListener('click', render);
+
+  await listen<RenderProgress>('render-progress', event => {
+    const { ratio, message } = event.payload;
+    progressFill.style.width = `${Math.round(ratio * 100)}%`;
+    showProgress(`${message} ${Math.round(ratio * 100)}%`);
+  });
   for (const input of [prerollInput, postrollInput, fpsSelect]) {
     input.addEventListener('change', updatePaddingNote);
   }
@@ -157,6 +172,7 @@ async function loadFile(path: string) {
     settings.classList.remove('hidden');
     updatePaddingNote();
     progress.textContent = '';
+    progressBar.classList.add('hidden');
   } catch (e) {
     showError(String(e));
   }
@@ -260,6 +276,8 @@ async function render() {
   if (!outputPath) return;
 
   btnRender.disabled = true;
+  progressBar.classList.remove('hidden');
+  progressFill.style.width = '0%';
   const timing = computeTiming(loaded);
 
   try {
@@ -289,8 +307,10 @@ async function render() {
       },
     });
 
+    progressBar.classList.add('hidden');
     showProgress(`書き出しました: ${outputPath}`);
   } catch (e) {
+    progressBar.classList.add('hidden');
     showProgress(String(e), true);
   } finally {
     btnRender.disabled = false;

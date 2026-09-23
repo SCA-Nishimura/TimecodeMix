@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::ffmpeg::run;
+use crate::ffmpeg::run_with_progress;
 use crate::ltc;
 
 #[derive(Debug, Deserialize)]
@@ -38,21 +38,55 @@ pub struct RenderOptions {
     pub start_timecode: String,
 }
 
-/// 黒フレームは本編と同じコーデックで作らないと、ストリームコピーのまま連結できない。
-fn black_encoder(video_codec: &str) -> Result<Vec<String>, String> {
-    let args = match video_codec {
-        "h264" => vec!["-c:v", "libx264", "-preset", "veryfast", "-crf", "18"],
-        "hevc" => vec!["-c:v", "libx265", "-preset", "veryfast", "-crf", "20"],
-        "prores" => vec!["-c:v", "prores_ks", "-profile:v", "3"],
-        other => {
-            return Err(format!(
-                "コーデック {other} ではプリロール/ポストロールを付けられません。\
-                 黒フレームを本編と同じ形式で作れないためです。\
-                 プリロールとポストロールを0にすれば、このファイルでも処理できます。"
-            ))
-        }
-    };
-    Ok(args.into_iter().map(String::from).collect())
+/// セグメントの連結方法。コーデックによって使える手段が違う。
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ConcatStrategy {
+    /// H.264 / HEVC 用。
+    /// これらはパラメータセット(SPS/PPS等)をコンテナ側に1つだけ持つため、
+    /// 別々にエンコードしたセグメントをそのまま繋ぐと後続が正しく復号できない。
+    /// MPEG-TSはフレーム内にパラメータセットを埋め込むのでこの問題が起きない。
+    MpegTs { annexb_filter: &'static str },
+    /// ProRes のような全フレームがキーフレームの形式用。
+    /// パラメータセットの問題が無いので、MOVのまま concat デマルチプレクサで繋げる。
+    /// (ProResはMPEG-TSに入れられないので、そもそもTS経由は使えない)
+    ConcatDemuxer,
+}
+
+#[derive(Debug)]
+struct CodecProfile {
+    strategy: ConcatStrategy,
+    /// 黒フレームを本編と同じ形式で作るためのエンコーダ指定
+    black_encoder: &'static [&'static str],
+    segment_extension: &'static str,
+    segment_format: &'static str,
+}
+
+fn codec_profile(video_codec: &str) -> Result<CodecProfile, String> {
+    match video_codec {
+        "h264" => Ok(CodecProfile {
+            strategy: ConcatStrategy::MpegTs { annexb_filter: "h264_mp4toannexb" },
+            black_encoder: &["-c:v", "libx264", "-preset", "veryfast", "-crf", "18"],
+            segment_extension: "ts",
+            segment_format: "mpegts",
+        }),
+        "hevc" => Ok(CodecProfile {
+            strategy: ConcatStrategy::MpegTs { annexb_filter: "hevc_mp4toannexb" },
+            black_encoder: &["-c:v", "libx265", "-preset", "veryfast", "-crf", "20"],
+            segment_extension: "ts",
+            segment_format: "mpegts",
+        }),
+        "prores" => Ok(CodecProfile {
+            strategy: ConcatStrategy::ConcatDemuxer,
+            black_encoder: &["-c:v", "prores_ks", "-profile:v", "3"],
+            segment_extension: "mov",
+            segment_format: "mov",
+        }),
+        other => Err(format!(
+            "コーデック {other} ではプリロール/ポストロールを付けられません。\
+             黒フレームを本編と同じ形式で作れないためです。\
+             プリロールとポストロールを0にすれば、このファイルでも処理できます。"
+        )),
+    }
 }
 
 fn audio_codec(bit_depth: u16) -> &'static str {
@@ -63,12 +97,17 @@ fn audio_codec(bit_depth: u16) -> &'static str {
     }
 }
 
-/// 黒だけをエンコードしてMPEG-TSで書き出す。
-/// TSにするのはSPS/PPSがフレーム内に入り、連結しても各セグメントが正しく復号できるため。
+/// 黒だけを本編と同じ形式でエンコードする。
+///
+/// H.264なら一瞬で終わるが、ProResのようなイントラ圧縮では1080pで
+/// 1フレームあたり1.5MB近くになり、数秒かかることがある。
+/// 無反応にならないよう進捗を報告する。
 fn encode_black_segment(
     options: &RenderOptions,
+    profile: &CodecProfile,
     frames: u32,
     out: &Path,
+    on_progress: impl FnMut(f64),
 ) -> Result<(), String> {
     let duration = frames as f64 * options.fps_den as f64 / options.fps_num as f64;
     let size = format!("{}x{}", options.width, options.height);
@@ -76,65 +115,69 @@ fn encode_black_segment(
     let source = format!("color=c=black:s={size}:r={rate}:d={duration}");
     let out_str = out.to_string_lossy().to_string();
 
-    let mut args: Vec<String> = vec![
-        "-y", "-v", "error", "-f", "lavfi", "-i",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect();
+    let mut args: Vec<String> = ["-y", "-v", "error", "-f", "lavfi", "-i"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     args.push(source);
-    args.extend(black_encoder(&options.video_codec)?);
-    args.extend(
-        ["-pix_fmt", &options.pixel_format, "-bsf:v", "h264_mp4toannexb", "-f", "mpegts"]
-            .iter()
-            .map(|s| s.to_string()),
-    );
+    args.extend(profile.black_encoder.iter().map(|s| s.to_string()));
+    args.extend(["-pix_fmt".to_string(), options.pixel_format.clone()]);
+
+    if let ConcatStrategy::MpegTs { annexb_filter } = profile.strategy {
+        args.extend(["-bsf:v".to_string(), annexb_filter.to_string()]);
+    }
+
+    args.extend(["-f".to_string(), profile.segment_format.to_string()]);
     args.push(out_str);
 
-    // H.264以外は annexb のビットストリームフィルタが不要なので落とす
-    if options.video_codec != "h264" {
-        if let Some(pos) = args.iter().position(|a| a == "-bsf:v") {
-            args.drain(pos..pos + 2);
-        }
-    }
-
+    let duration_us = (duration * 1_000_000.0) as u64;
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let output = run("ffmpeg", &arg_refs)?;
-    if !output.status.success() {
-        return Err(format!(
-            "黒フレームの生成に失敗しました: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
+    run_with_progress(&arg_refs, duration_us, on_progress)
+        .map_err(|e| format!("黒フレームの生成に失敗しました: {e}"))?;
     Ok(())
 }
 
-/// 本編の映像を再エンコードせずTS化する
-fn remux_main_to_ts(input: &str, out: &Path) -> Result<(), String> {
+/// 本編の映像を再エンコードせずセグメント化する。
+///
+/// 再エンコードはしないが素材のサイズぶんI/Oが発生する。ProResのような
+/// 大容量素材ではここが最も時間を食うため、進捗を報告する。
+fn remux_main_segment(
+    input: &str,
+    profile: &CodecProfile,
+    out: &Path,
+    duration_us: u64,
+    on_progress: impl FnMut(f64),
+) -> Result<(), String> {
     let out_str = out.to_string_lossy().to_string();
-    let output = run(
-        "ffmpeg",
-        &[
-            "-y", "-v", "error", "-i", input, "-map", "0:v:0", "-c:v", "copy",
-            "-bsf:v", "h264_mp4toannexb", "-f", "mpegts", &out_str,
-        ],
-    )?;
-    if !output.status.success() {
-        // H.264以外では annexb フィルタが使えないので、外して再試行する
-        let retry = run(
-            "ffmpeg",
-            &[
-                "-y", "-v", "error", "-i", input, "-map", "0:v:0", "-c:v", "copy",
-                "-f", "mpegts", &out_str,
-            ],
-        )?;
-        if !retry.status.success() {
-            return Err(format!(
-                "映像の読み出しに失敗しました: {}",
-                String::from_utf8_lossy(&retry.stderr).trim()
-            ));
-        }
+    let mut args: Vec<String> = [
+        "-y", "-v", "error", "-i", input, "-map", "0:v:0", "-c:v", "copy",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+
+    if let ConcatStrategy::MpegTs { annexb_filter } = profile.strategy {
+        args.extend(["-bsf:v".to_string(), annexb_filter.to_string()]);
     }
+    args.extend(["-f".to_string(), profile.segment_format.to_string()]);
+    args.push(out_str);
+
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    run_with_progress(&arg_refs, duration_us, on_progress)
+        .map_err(|e| format!("映像の読み出しに失敗しました: {e}"))?;
+
+    // ffmpegは対応していないコーデックをMPEG-TSへ入れようとしたとき、
+    // 終了コード0のままデータストリームとして書き出してしまうことがある。
+    // 壊れた出力をそのまま進めないよう、映像が入っているか確かめる。
+    let probe_json = crate::ffmpeg::probe(&out.to_string_lossy())?;
+    if !probe_json.contains("\"codec_type\": \"video\"") {
+        return Err(format!(
+            "この映像({})は中間形式に変換できませんでした。\
+             プリロールとポストロールを0にすれば処理できる場合があります。",
+            profile.segment_format
+        ));
+    }
+
     Ok(())
 }
 
@@ -171,6 +214,28 @@ fn build_audio_filter(options: &RenderOptions) -> String {
     chain
 }
 
+/// 進捗の通知。フロントエンドはこれを受けてバーと文言を更新する。
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderProgress {
+    /// 0.0 〜 1.0
+    pub ratio: f64,
+    pub message: String,
+}
+
+/// 工程ごとの重み。
+///
+/// 素材が大きいほど、本編を読み出すTS化と最終の多重化が支配的になる
+/// (どちらも素材のサイズぶんI/Oが走る)。黒の生成とLTC生成は尺に対して
+/// ほぼ一定時間で終わるので小さく取る。
+/// 黒の生成は、H.264なら一瞬だがProResでは数秒かかる。
+/// コーデック差を厳密に重みへ反映するのは難しいので、どちらでも極端に
+/// 不自然にならない配分にし、各工程の中で進捗を出してバーを動かし続ける。
+const WEIGHT_LTC: f64 = 0.05;
+const WEIGHT_REMUX: f64 = 0.30;
+const WEIGHT_BLACK: f64 = 0.15;
+const WEIGHT_OUTPUT: f64 = 0.50;
+
 /// 処理ごとに固有の作業ディレクトリを作る。
 /// プロセス単位で共有すると、連続して処理を走らせたときに
 /// 先に終わった側が後続の作業ファイルごと消してしまう。
@@ -192,9 +257,12 @@ fn unique_work_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-pub fn render(options: RenderOptions) -> Result<String, String> {
+pub fn render(
+    options: RenderOptions,
+    report: impl Fn(RenderProgress),
+) -> Result<String, String> {
     let work_dir = unique_work_dir()?;
-    let result = render_inner(&options, &work_dir);
+    let result = render_inner(&options, &work_dir, &report);
     let _ = fs::remove_dir_all(&work_dir);
     result
 }
@@ -230,7 +298,53 @@ fn write_ltc_file(
     Ok(path)
 }
 
-fn render_inner(options: &RenderOptions, work_dir: &Path) -> Result<String, String> {
+/// 連結したセグメントを入力として渡すための ffmpeg 引数を組み立てる。
+///
+/// concat デマルチプレクサはリストファイルを要求するので、作った場合は
+/// 処理が終わるまで消えないようパスも返す。
+fn build_concat_input(
+    segments: &[PathBuf],
+    profile: &CodecProfile,
+    work_dir: &Path,
+) -> Result<(Vec<String>, Option<PathBuf>), String> {
+    match profile.strategy {
+        ConcatStrategy::MpegTs { .. } => {
+            let joined = segments
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .join("|");
+            Ok((vec!["-i".to_string(), format!("concat:{joined}")], None))
+        }
+        ConcatStrategy::ConcatDemuxer => {
+            let list_path = work_dir.join("segments.txt");
+            let body = segments
+                .iter()
+                .map(|p| format!("file '{}'", p.to_string_lossy().replace('\\', "/")))
+                .collect::<Vec<_>>()
+                .join("\n");
+            fs::write(&list_path, body)
+                .map_err(|e| format!("連結リストを書き出せません: {e}"))?;
+            Ok((
+                vec![
+                    "-f".to_string(),
+                    "concat".to_string(),
+                    "-safe".to_string(),
+                    "0".to_string(),
+                    "-i".to_string(),
+                    list_path.to_string_lossy().to_string(),
+                ],
+                Some(list_path),
+            ))
+        }
+    }
+}
+
+fn render_inner(
+    options: &RenderOptions,
+    work_dir: &Path,
+    report: &impl Fn(RenderProgress),
+) -> Result<String, String> {
     let config = ltc::find_frame_rate(&options.fps_id)
         .ok_or_else(|| format!("未知のフレームレートです: {}", options.fps_id))?;
     let start_frames = ltc::parse_timecode(&options.start_timecode, config)?;
@@ -244,44 +358,78 @@ fn render_inner(options: &RenderOptions, work_dir: &Path) -> Result<String, Stri
     );
 
     // 0. LTC波形を生成する
+    report(RenderProgress { ratio: 0.0, message: "タイムコードを生成しています".into() });
     let ltc_path = write_ltc_file(options, config, start_frames, work_dir)?;
 
-    // 1. 本編をストリームコピーでTS化
-    let main_ts = work_dir.join("main.ts");
-    remux_main_to_ts(&options.input_path, &main_ts)?;
+    let profile = codec_profile(&options.video_codec)?;
+    let extension = profile.segment_extension;
 
-    // 2. 必要なら黒セグメントを作る (黒だけのエンコードなので一瞬で終わる)
+    // 1. 本編をストリームコピーでセグメント化
+    report(RenderProgress { ratio: WEIGHT_LTC, message: "映像を読み出しています".into() });
+    let main_segment = work_dir.join(format!("main.{extension}"));
+    let source_duration_us = options.total_samples * 1_000_000 / options.sample_rate as u64;
+    remux_main_segment(
+        &options.input_path,
+        &profile,
+        &main_segment,
+        source_duration_us,
+        |done| {
+            report(RenderProgress {
+                ratio: WEIGHT_LTC + WEIGHT_REMUX * done,
+                message: "映像を読み出しています".into(),
+            });
+        },
+    )?;
+
+    // 2. 必要なら黒セグメントを作る
+    let black_base = WEIGHT_LTC + WEIGHT_REMUX;
     let mut segments: Vec<PathBuf> = Vec::new();
+
+    // プリとポストで進捗の範囲を折半する
+    let black_parts =
+        (options.preroll_frames > 0) as u32 + (options.postroll_frames > 0) as u32;
+    let mut finished_parts = 0u32;
+    let black_progress = |done: f64, finished: u32| {
+        if black_parts == 0 {
+            return;
+        }
+        let share = (finished as f64 + done) / black_parts as f64;
+        report(RenderProgress {
+            ratio: black_base + WEIGHT_BLACK * share,
+            message: "前後の黒を作成しています".into(),
+        });
+    };
+
+    if black_parts > 0 {
+        black_progress(0.0, 0);
+    }
+
     if options.preroll_frames > 0 {
-        let pre = work_dir.join("pre.ts");
-        encode_black_segment(options, options.preroll_frames, &pre)?;
+        let pre = work_dir.join(format!("pre.{extension}"));
+        encode_black_segment(options, &profile, options.preroll_frames, &pre, |done| {
+            black_progress(done, finished_parts)
+        })?;
+        finished_parts += 1;
         segments.push(pre);
     }
-    segments.push(main_ts);
+    segments.push(main_segment);
     if options.postroll_frames > 0 {
-        let post = work_dir.join("post.ts");
-        encode_black_segment(options, options.postroll_frames, &post)?;
+        let post = work_dir.join(format!("post.{extension}"));
+        encode_black_segment(options, &profile, options.postroll_frames, &post, |done| {
+            black_progress(done, finished_parts)
+        })?;
         segments.push(post);
     }
 
-    let concat_input = format!(
-        "concat:{}",
-        segments
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect::<Vec<_>>()
-            .join("|")
-    );
+    // 連結の指定方法は方式によって変わる
+    let (concat_args, _list_file) = build_concat_input(&segments, &profile, work_dir)?;
 
     // 3. 連結した映像 + LTC + 元音声 を MOV に多重化する
     let sample_rate = options.sample_rate.to_string();
     let filter = build_audio_filter(options);
-    let mut args: Vec<String> = vec![
-        "-y".into(),
-        "-v".into(),
-        "error".into(),
-        "-i".into(),
-        concat_input,
+    let mut args: Vec<String> = vec!["-y".into(), "-v".into(), "error".into()];
+    args.extend(concat_args);
+    args.extend([
         // LTCはヘッダの無い生データなので形式を明示する
         "-f".into(),
         "f32le".into(),
@@ -291,7 +439,7 @@ fn render_inner(options: &RenderOptions, work_dir: &Path) -> Result<String, Stri
         "1".into(),
         "-i".into(),
         ltc_path.to_string_lossy().to_string(),
-    ];
+    ]);
 
     if options.source_channels > 0 {
         args.extend(["-i".into(), options.input_path.clone()]);
@@ -315,21 +463,27 @@ fn render_inner(options: &RenderOptions, work_dir: &Path) -> Result<String, Stri
         options.output_path.clone(),
     ]);
 
-    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let output = run("ffmpeg", &arg_refs)?;
-    if !output.status.success() {
-        return Err(format!(
-            "書き出しに失敗しました: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
+    let base = WEIGHT_LTC + WEIGHT_REMUX + WEIGHT_BLACK;
+    let output_duration_us = options.total_samples * 1_000_000 / options.sample_rate as u64;
 
+    report(RenderProgress { ratio: base, message: "書き出しています".into() });
+
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    run_with_progress(&arg_refs, output_duration_us, |done| {
+        report(RenderProgress {
+            ratio: base + WEIGHT_OUTPUT * done,
+            message: "書き出しています".into(),
+        });
+    })?;
+
+    report(RenderProgress { ratio: 1.0, message: "完了".into() });
     Ok(options.output_path.clone())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ffmpeg::run;
 
     const FPS_NUM: u32 = 30000;
     const FPS_DEN: u32 = 1001;
@@ -401,7 +555,7 @@ mod tests {
         let out = temp_path("tcmix_render_out.mov");
 
         let options = options_for(&source, &out, 30, 15, 1, total_samples);
-        render(options).expect("レンダリングに失敗しました");
+        render(options, |_| {}).expect("レンダリングに失敗しました");
 
         let json = probe_json(&out);
         assert!(json.contains("\"codec_name\": \"h264\""), "{json}");
@@ -427,7 +581,7 @@ mod tests {
         let total_samples = total_samples_for(total_frames);
         let out = temp_path("tcmix_black_out.mov");
 
-        render(options_for(&source, &out, 30, 0, 1, total_samples))
+        render(options_for(&source, &out, 30, 0, 1, total_samples), |_| {})
             .expect("レンダリングに失敗しました");
 
         // プリロール中(0.5秒)は真っ黒、本編(1.5秒)は黒くないはず。
@@ -461,7 +615,7 @@ mod tests {
         let total_samples = total_samples_for(total_frames);
         let out = temp_path("tcmix_nopad_out.mov");
 
-        render(options_for(&source, &out, 0, 0, 1, total_samples))
+        render(options_for(&source, &out, 0, 0, 1, total_samples), |_| {})
             .expect("レンダリングに失敗しました");
         assert!(out.exists());
 
@@ -477,7 +631,7 @@ mod tests {
         let total_samples = total_samples_for(total_frames);
         let out = temp_path("tcmix_noaudio_out.mov");
 
-        render(options_for(&source, &out, 30, 0, 0, total_samples))
+        render(options_for(&source, &out, 30, 0, 0, total_samples), |_| {})
             .expect("音声トラックが無い素材でレンダリングに失敗しました");
 
         let json = probe_json(&out);
@@ -488,9 +642,56 @@ mod tests {
         }
     }
 
+    /// ProResは業務マスターの主要形式。MPEG-TSに入れられないため、
+    /// H.264とは別の連結方式(concatデマルチプレクサ)を通る。
+    /// ffmpegはProResをTSへ入れようとしても終了コード0のまま
+    /// データストリームとして書き出してしまうため、経路を誤ると
+    /// 「成功したように見えて映像が消える」形で壊れる。
+    #[test]
+    fn renders_prores_with_black_padding() {
+        let source = temp_path("tcmix_prores_src.mov");
+        let source_str = source.to_string_lossy().to_string();
+        let output = run(
+            "ffmpeg",
+            &[
+                "-y", "-v", "error",
+                "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=30000/1001:duration=2",
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=2",
+                "-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le",
+                "-c:a", "pcm_s16le", &source_str,
+            ],
+        )
+        .expect("ffmpegを実行できません");
+        assert!(output.status.success(), "ProRes素材の生成に失敗しました");
+
+        let total_frames = 60 + 30;
+        let total_samples = total_samples_for(total_frames);
+        let out = temp_path("tcmix_prores_out.mov");
+
+        let mut options = options_for(&source, &out, 30, 0, 1, total_samples);
+        options.video_codec = "prores".into();
+        options.pixel_format = "yuv422p10le".into();
+
+        render(options, |_| {}).expect("ProResのレンダリングに失敗しました");
+
+        let json = probe_json(&out);
+        assert!(json.contains("\"codec_name\": \"prores\""), "映像がProResで残っていません: {json}");
+        assert!(json.contains("\"codec_type\": \"video\""), "映像トラックが消えています: {json}");
+        assert!(json.contains("\"codec_name\": \"pcm_s24le\""), "{json}");
+
+        let decode = run("ffmpeg", &["-v", "error", "-i", &out.to_string_lossy(), "-f", "null", "-"])
+            .expect("ffmpegを実行できません");
+        let stderr = String::from_utf8_lossy(&decode.stderr);
+        assert!(stderr.trim().is_empty(), "復号エラーが出ました: {stderr}");
+
+        for f in [source, out] {
+            let _ = fs::remove_file(f);
+        }
+    }
+
     #[test]
     fn rejects_padding_for_unsupported_codec() {
-        let result = black_encoder("vp9");
+        let result = codec_profile("vp9");
         assert!(result.is_err());
         let message = result.unwrap_err();
         assert!(message.contains("0にすれば"), "対処方法が案内されていません: {message}");

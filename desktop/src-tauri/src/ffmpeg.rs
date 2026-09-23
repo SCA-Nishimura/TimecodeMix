@@ -1,5 +1,6 @@
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -29,6 +30,63 @@ fn resolve_tool(name: &str) -> PathBuf {
     }
 
     PathBuf::from(name)
+}
+
+/// ffmpeg を起動し、進捗を逐次コールバックへ渡しながら完了を待つ。
+///
+/// `-progress pipe:1` で流れてくる `out_time_us`(出力済みの再生位置)を
+/// 全体の尺で割って 0.0〜1.0 の比率にして報告する。
+///
+/// 映像のフレーム数(`frame=`)は使わない。ストリームコピーでは映像だけが
+/// 先に進んでしまい、音声処理の進み具合を反映しないため。
+pub fn run_with_progress(
+    args: &[&str],
+    total_duration_us: u64,
+    mut on_progress: impl FnMut(f64),
+) -> Result<std::process::ExitStatus, String> {
+    let mut command = Command::new(resolve_tool("ffmpeg"));
+    command
+        .args(["-progress", "pipe:1", "-nostats"])
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("ffmpeg を実行できませんでした。 ({e})"))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "ffmpeg の出力を読み取れませんでした。".to_string())?;
+
+    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+        if let Some(value) = line.strip_prefix("out_time_us=") {
+            if total_duration_us == 0 {
+                continue;
+            }
+            // 処理開始直後は N/A が来ることがある
+            if let Ok(microseconds) = value.trim().parse::<u64>() {
+                on_progress((microseconds as f64 / total_duration_us as f64).clamp(0.0, 1.0));
+            }
+        }
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("ffmpeg の終了を待てませんでした。 ({e})"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "書き出しに失敗しました: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    Ok(output.status)
 }
 
 pub fn run(tool: &str, args: &[&str]) -> Result<Output, String> {

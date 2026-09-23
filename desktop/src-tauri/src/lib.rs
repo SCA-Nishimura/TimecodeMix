@@ -3,6 +3,7 @@ mod ltc;
 mod render;
 
 use render::RenderOptions;
+use tauri::Emitter;
 
 #[tauri::command]
 fn check_ffmpeg() -> Result<ffmpeg::FfmpegStatus, String> {
@@ -14,12 +15,17 @@ fn probe_video(path: String) -> Result<String, String> {
     ffmpeg::probe(&path)
 }
 
-/// 書き出しは数十秒かかることがあるため、UIを止めないよう別スレッドで実行する
+/// 書き出しは数十秒かかることがあるため、UIを止めないよう別スレッドで実行する。
+/// 進捗は render-progress イベントでフロントエンドへ流す。
 #[tauri::command]
-async fn render_video(options: RenderOptions) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || render::render(options))
-        .await
-        .map_err(|e| format!("処理を実行できませんでした: {e}"))?
+async fn render_video(app: tauri::AppHandle, options: RenderOptions) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        render::render(options, |progress| {
+            let _ = app.emit("render-progress", progress);
+        })
+    })
+    .await
+    .map_err(|e| format!("処理を実行できませんでした: {e}"))?
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

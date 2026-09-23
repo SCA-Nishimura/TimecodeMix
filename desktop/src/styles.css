@@ -253,3 +253,19 @@ h1 small {
   color: #fca5a5;
   font-size: 0.88rem;
 }
+
+.progress-bar {
+  margin-top: 16px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-purple), #6366f1);
+  transition: width 0.25s ease-out;
+}
