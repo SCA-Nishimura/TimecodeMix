@@ -4,6 +4,8 @@
   --panel-bg: rgba(13, 17, 39, 0.6);
   --panel-border: rgba(255, 255, 255, 0.07);
   --accent-purple: #a855f7;
+  --accent-emerald: #10b981;
+  --danger: #ef4444;
   --text-primary: #f3f4f6;
   --text-secondary: #9ca3af;
 
@@ -50,27 +52,126 @@ h1 small {
   margin-bottom: 32px;
 }
 
-.status {
+.hidden {
+  display: none;
+}
+
+.env-status {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  margin-bottom: 20px;
+  word-break: break-word;
+}
+
+.env-status.is-ok {
+  border-color: rgba(16, 185, 129, 0.35);
+  color: var(--accent-emerald);
+}
+
+.env-status.is-error {
+  border-color: rgba(239, 68, 68, 0.4);
+  color: var(--danger);
+}
+
+.dropzone {
+  border: 1.5px dashed var(--panel-border);
+  border-radius: 14px;
+  padding: 44px 24px;
+  text-align: center;
+  background: var(--panel-bg);
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.dropzone.is-dragover {
+  border-color: var(--accent-purple);
+  background: rgba(168, 85, 247, 0.08);
+}
+
+.dropzone.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.dropzone-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.dropzone-hint {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin-top: 4px;
+}
+
+.btn {
+  margin-top: 18px;
+  padding: 9px 20px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.btn:hover {
+  background: rgba(168, 85, 247, 0.16);
+  border-color: var(--accent-purple);
+}
+
+.panel {
+  margin-top: 24px;
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
   border-radius: 12px;
   padding: 24px;
 }
 
-.status h2 {
+.panel h2 {
   font-size: 1rem;
   font-weight: 600;
   margin-bottom: 16px;
   color: var(--accent-purple);
 }
 
-.status dt {
+.panel dt {
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   margin-top: 12px;
 }
 
-.status dd {
+.panel dd {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 0.95rem;
+  font-size: 0.92rem;
+  word-break: break-all;
+}
+
+.recommendation {
+  margin-top: 20px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: rgba(168, 85, 247, 0.1);
+  border: 1px solid rgba(168, 85, 247, 0.28);
+  font-size: 0.9rem;
+  white-space: pre-line;
+}
+
+.recommendation:empty {
+  display: none;
+}
+
+.warning {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+  font-size: 0.88rem;
 }

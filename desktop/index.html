@@ -10,9 +10,25 @@
 
   <body>
     <main class="container">
-      <h1>TimecodeMix <small>Desktop</small></h1>
-      <p class="subtitle">映像・音声にLTCタイムコードを合成する</p>
-      <section id="status" class="status">起動中...</section>
+      <header>
+        <h1>TimecodeMix <small>Desktop</small></h1>
+        <p class="subtitle">映像・音声にLTCタイムコードを合成する</p>
+      </header>
+
+      <p id="env-status" class="env-status">環境を確認中...</p>
+
+      <section id="dropzone" class="dropzone">
+        <p class="dropzone-title">映像ファイルをドロップ</p>
+        <p class="dropzone-hint">MP4 / MOV に対応</p>
+        <button id="btn-select" type="button" class="btn">ファイルを選択</button>
+      </section>
+
+      <section id="result" class="panel hidden">
+        <h2>解析結果</h2>
+        <dl id="meta"></dl>
+        <p id="recommendation" class="recommendation"></p>
+        <div id="warnings"></div>
+      </section>
     </main>
   </body>
 </html>
