@@ -166,6 +166,84 @@ h1 small {
   display: none;
 }
 
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.field select,
+.field input {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  background: #11142a;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.field .mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.field select:focus,
+.field input:focus {
+  outline: none;
+  border-color: var(--accent-purple);
+}
+
+.note {
+  margin-top: 18px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+.note.is-error {
+  color: #fca5a5;
+}
+
+.btn-primary {
+  width: 100%;
+  margin-top: 18px;
+  padding: 12px;
+  background: var(--accent-purple);
+  border-color: var(--accent-purple);
+  font-weight: 600;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #9333ea;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.progress {
+  margin-top: 14px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.progress.is-error {
+  color: #fca5a5;
+}
+
 .warning {
   margin-top: 12px;
   padding: 14px 16px;

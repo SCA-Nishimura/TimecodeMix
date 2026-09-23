@@ -23,11 +23,52 @@
         <button id="btn-select" type="button" class="btn">ファイルを選択</button>
       </section>
 
-      <section id="result" class="panel hidden">
+      <section id="analysis" class="panel hidden">
         <h2>解析結果</h2>
         <dl id="meta"></dl>
         <p id="recommendation" class="recommendation"></p>
         <div id="warnings"></div>
+      </section>
+
+      <section id="settings" class="panel hidden">
+        <h2>設定</h2>
+
+        <div class="field-grid">
+          <div class="field">
+            <label for="fps-select">タイムコードのFPS</label>
+            <select id="fps-select"></select>
+          </div>
+          <div class="field">
+            <label for="tc-start">開始タイムコード</label>
+            <input id="tc-start" type="text" class="mono" value="01:00:00:00" />
+          </div>
+          <div class="field">
+            <label for="preroll">プリロール(秒)</label>
+            <input id="preroll" type="number" min="0" step="0.1" value="0" class="mono" />
+          </div>
+          <div class="field">
+            <label for="postroll">ポストロール(秒)</label>
+            <input id="postroll" type="number" min="0" step="0.1" value="0" class="mono" />
+          </div>
+          <div class="field">
+            <label for="ltc-level">LTCレベル(dBFS)</label>
+            <select id="ltc-level"></select>
+          </div>
+          <div class="field">
+            <label for="bit-depth">出力ビット深度</label>
+            <select id="bit-depth">
+              <option value="24">24-bit</option>
+              <option value="16">16-bit</option>
+            </select>
+          </div>
+        </div>
+
+        <p id="padding-note" class="note"></p>
+
+        <button id="btn-render" type="button" class="btn btn-primary">
+          <span class="btn-text">書き出し</span>
+        </button>
+        <p id="progress" class="progress"></p>
       </section>
     </main>
   </body>

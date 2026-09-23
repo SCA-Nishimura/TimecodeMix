@@ -31,7 +31,7 @@ fn resolve_tool(name: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
-fn run(tool: &str, args: &[&str]) -> Result<Output, String> {
+pub fn run(tool: &str, args: &[&str]) -> Result<Output, String> {
     let mut command = Command::new(resolve_tool(tool));
     command.args(args);
 
